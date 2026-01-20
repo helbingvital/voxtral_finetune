@@ -136,8 +136,9 @@ def load_train_val_data(dataset_cfg: Any):
         print("Loading MultiMed German dataset (~5 GB)...")
         return _load_multimed_german()
     elif dataset_name == "radmed_uka":
+        root_path = dataset_cfg.get("root_path")
         print("Loading radmed uka dataset from local files...")
-        return _load_radmed_uka()
+        return _load_radmed_uka(root_path=root_path)
     else:
         raise ValueError(f"Dataset {dataset_name} not implemented.")
     
