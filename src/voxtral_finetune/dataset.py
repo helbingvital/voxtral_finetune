@@ -124,6 +124,24 @@ def _load_radmed_uka(datafiles=None, root_path="/Users/helbing/", use_normalized
 
     return train, validation
 
+def _load_radmed_uka_test(datafiles=None, root_path="/Users/helbing/", use_normalized_label=True):
+    if not datafiles:
+        datafiles = {"test":"splits/medical_split_20251113/test.csv",}
+    dataset = load_dataset("csv", data_files=datafiles)
+    
+    def prepend_root(batch):
+        batch["audio"] = [os.path.join(root_path, path) for path in batch["audio"]]
+        return batch
+    dataset = dataset.map(prepend_root, batched=True)
+
+    test = dataset['test']
+    test = test.rename_column("text_norm", "labels") if use_normalized_label else train.rename_column("text", "labels")
+    test = test.cast_column("audio", Audio(sampling_rate=16_000))
+    # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
+
+    _validate_dataset_split(test, "test")
+    return test
+
 def load_train_val_data(dataset_cfg: Any):
     dataset_name = dataset_cfg.get("name")
     if dataset_name not in ["librispeech_clean", "multimed_german", "radmed_uka"]:
@@ -141,4 +159,15 @@ def load_train_val_data(dataset_cfg: Any):
         return _load_radmed_uka(root_path=root_path)
     else:
         raise ValueError(f"Dataset {dataset_name} not implemented.")
+
+def load_test_data(dataset_cfg:Any):    
+    dataset_name = dataset_cfg.get("name")
+    if dataset_name not in ["librispeech_clean", "multimed_german", "radmed_uka"]:
+        raise ValueError(f"Dataset {dataset_name} not supported. Choose from 'librispeech_clean', 'multimed_german' or 'radmed_uka'.")
     
+    if dataset_name == "radmed_uka":
+        root_path = dataset_cfg.get("root_path")
+        print("Loading radmed uka dataset from local files...")
+        return _load_radmed_uka_test(root_path=root_path)
+    else:
+        raise ValueError(f"Dataset {dataset_name} not implemented.")
