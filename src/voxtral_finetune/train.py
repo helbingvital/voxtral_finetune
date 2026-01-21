@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import evaluate
 import json
+import csv
 
 from audiomentations import Compose
 from transformers import (
@@ -126,9 +127,17 @@ def train(cfg: Any, config_name: str) -> None:
     print("Len train ds:", len(ds_train))
     print("Len val dataset:", len(ds_eval))
     
+    fp16 = cfg.get("training", {}).get("fp16", False)
+    bf16 = cfg.get("training", {}).get("bf16", True)
+    if fp16 and bf16:
+        raise Exception("Only select bf16 or fp16 in config file.")
+    dtype = torch.bfloat16 if bf16 else torch.float16
     processor = AutoProcessor.from_pretrained(cfg.get("model", {}).get("pretrained", ""))
-    model = AutoModel.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=torch.bfloat16)
 
+    model = AutoModel.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=dtype)
+
+    
+    
     args = Seq2SeqTrainingArguments(
         output_dir=cfg["training"].get("output_dir", os.path.join(get_abs_project_root_path(), f"weights/{config_name}/")),
         per_device_train_batch_size=cfg["training"]["per_device_train_batch_size"],
@@ -138,8 +147,8 @@ def train(cfg: Any, config_name: str) -> None:
         weight_decay=cfg["training"]["weight_decay"],
         warmup_steps=cfg["training"].get("warmup_steps", 500),
         num_train_epochs=cfg["training"].get("num_train_epochs", 15),
-        #fp16=True,
-        bf16=True,
+        # fp16=fp16,
+        bf16=bf16,
         eval_strategy=IntervalStrategy.STEPS,
         eval_steps=cfg["training"].get("eval_steps", 5000),
         save_strategy = IntervalStrategy.STEPS,
@@ -188,8 +197,17 @@ def train(cfg: Any, config_name: str) -> None:
     print("Starting evaluate...")
     results = trainer.predict(ds_eval)
     print("Finished.")
+    prediction_ids = results.predictions
+    metrics = results.metrics
     with open("debug_trainer_predict.json", 'w') as f:
-        json.dump(results, f)
+        json.dump(metrics, f)
+    decoded = processor.batch_decode(prediction_ids[:, :prediction_ids.shape[1]], skip_special_tokens=True) #with language token
+    labels = processor.batch_decode(results.label_ids[:, :results.label_ids.shape[1]], skip_special_tokens=True) #without
+    with open('./playground/transcriptions.csv', 'w', newline="", encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Pred", "Label"])
+        writer. writerows(zip(decoded, labels))
+
     print("Results saved.")
 
     
