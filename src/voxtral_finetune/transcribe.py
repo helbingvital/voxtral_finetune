@@ -1,78 +1,111 @@
-import torch
-from transformers import VoxtralForConditionalGeneration, AutoProcessor
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
+from typing import Dict, Any
 
-import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from dataset import _load_radmed_uka
-from collator import VoxtralCollatorTranscriptionTask
+import numpy as np
+import torch
+import torch.nn.functional as F
+import evaluate
+import json
+import csv
 
-accelerator = Accelerator()
-device = accelerator.device
-repo_id = "mistralai/Voxtral-Mini-3B-2507"
-processor = AutoProcessor.from_pretrained(repo_id)
-collator = VoxtralCollatorTranscriptionTask(processor=processor, model_id=repo_id, language="de")
-
-model = VoxtralForConditionalGeneration.from_pretrained(repo_id, device_map=device)
-
-train, eval = _load_radmed_uka(root_path="/hpcwork/ve001107/uka_dataset/")
-
-def collate_fn(examples):
-    # Extract the raw audio arrays
-    audio_arrays = [x["audio"]["array"] for x in examples]    
-    # Apply the transcription request to the whole list at once
-    # This handles the padding automatically
-    inputs = processor.apply_transcription_request(
-        language="en", 
-        audio=audio_arrays, 
-        model_id=repo_id
-    )
-    return inputs
-
-#---------Set up Data Collator ----------
-
-dataloader = DataLoader(
-    eval, 
-    batch_size=4, 
-    collate_fn=collator,
-    num_workers=2  # Parallel audio decoding
+from transformers import (
+    AutoProcessor,
+    AutoModel,
+    Seq2SeqTrainer,
+    IntervalStrategy,
+    Seq2SeqTrainingArguments,
 )
 
-model, dataloader = accelerator.prepare(model, dataloader)
+from voxtral_finetune.collator import VoxtralCollatorTranscriptionTask
+from voxtral_finetune.dataset import load_train_val_data
+from voxtral_finetune.utils import get_abs_project_root_path
+from voxtral_finetune.train import CustomSeq2SeqTrainer, _build_wer_fn
 
-# set the language is already know for better accuracy
-# inputs = processor.apply_transcription_request(language="de", 
-                                                # audio=audio["array"], 
-                                                # model_id=repo_id)
+def transcribe(cfg: Any, config_name: str) -> None:
 
-# # but you can also let the model detect the language automatically
-# inputs = processor.apply_transcription_request(audio="https://huggingface.co/datasets/hf-internal-testing/dummy-audio-samples/resolve/main/obama.mp3", model_id=repo_id) 
+    if cfg.get("dataset") is None or cfg.get("dataset").get("name") is None:
+        raise ValueError("Please provide a dataset configuration in the config file under 'dataset' and 'dataset.name'.")
+    
+    print("Loading dataset...")
+    ds_train, ds_eval = load_train_val_data(cfg["dataset"])
 
-# inputs = inputs.to(device, dtype=torch.bfloat16)
-# outputs = model.generate(**inputs, max_new_tokens=500)
-# decoded_outputs = processor.batch_decode(outputs[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)
+    # optional
+    # ds_train = add_transform_to_dataset(ds_train, cfg, build_augment_pipeline(cfg.get("augmentations")))
+    # ds_eval = add_transform_to_dataset(ds_eval, cfg, None)#.select(range(100))
+   
+    print("Len train ds:", len(ds_train))
+    print("Len val dataset:", len(ds_eval))
+    
+    fp16 = cfg.get("training", {}).get("fp16", False)
+    bf16 = cfg.get("training", {}).get("bf16", True)
+    if fp16 and bf16:
+        raise Exception("Only select bf16 or fp16 in config file.")
+    dtype = torch.bfloat16 if bf16 else torch.float16
+    processor = AutoProcessor.from_pretrained(cfg.get("model", {}).get("pretrained", ""))
 
-# print("\nGenerated responses:")
-# print("=" * 80)
-# for decoded_output in decoded_outputs:
-#     print(decoded_output)
-#     print("=" * 80)
+    model = AutoModel.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=dtype)
 
-model.eval()
-print("Starting transcription")
-with torch.no_grad():
-    for batch in dataloader:
-        # Generate
-        outputs = model.generate(**batch, max_new_tokens=200)
-        
-        # Decode only the NEW tokens
-        input_len = batch["input_ids"].shape[1]
-        decoded = processor.batch_decode(outputs[:, input_len:], skip_special_tokens=True)
-        
-        for text in decoded:
-            print(f"Transcription: {text.strip()}")
-        break
+    
+    
+    args = Seq2SeqTrainingArguments(
+        output_dir=cfg["training"].get("output_dir", os.path.join(get_abs_project_root_path(), f"weights/{config_name}/")),
+        per_device_train_batch_size=cfg["training"]["per_device_train_batch_size"],
+        per_device_eval_batch_size=cfg["training"]["per_device_eval_batch_size"],
+        gradient_accumulation_steps=cfg["training"]["gradient_accumulation_steps"],
+        learning_rate=cfg["training"]["learning_rate"],
+        weight_decay=cfg["training"]["weight_decay"],
+        warmup_steps=cfg["training"].get("warmup_steps", 500),
+        num_train_epochs=cfg["training"].get("num_train_epochs", 15),
+        # fp16=fp16,
+        bf16=bf16,
+        eval_strategy=IntervalStrategy.STEPS,
+        eval_steps=cfg["training"].get("eval_steps", 5000),
+        save_strategy = IntervalStrategy.STEPS,
+        save_steps=cfg["training"].get("save_steps", 5000),
+        save_total_limit=cfg["training"].get("save_total_limit", 1),
+        remove_unused_columns=False,
+        logging_steps=cfg["training"].get("logging_steps", 25),
+        label_smoothing_factor=cfg["training"].get("label_smoothing_factor", 0),
+        report_to=["tensorboard"],
+        metric_for_best_model=cfg["training"].get("metric_for_best_model"),
+        greater_is_better=cfg["training"].get("greater_is_better"),
+        dataloader_num_workers=cfg["training"].get("dataloader_num_workers"),
+        gradient_checkpointing=False,
+        optim="adamw_bnb_8bit",
+        max_grad_norm=cfg["training"].get("max_grad_norm", None),
+        predict_with_generate=False,
+    )
+    collator = VoxtralCollatorTranscriptionTask(processor, 
+                                                cfg.get("model", {}).get("pretrained", ""), 
+                                                language="de",
+                                                use_fp16=args.fp16)
 
-print("Finished")
+    metric_file = os.path.join(os.path.dirname(__file__), "wer")
+    compute_metrics = _build_wer_fn(processor, evaluate.load(metric_file))
+
+    trainer = CustomSeq2SeqTrainer(
+        train_dataset=ds_train,
+        eval_dataset=ds_eval,
+        model=model,
+        args=args,
+        data_collator=collator,
+        processor=processor,
+        compute_metrics=compute_metrics,
+    )
+    
+    
+    print("Starting transcription...")
+    results = trainer.predict(ds_eval)
+    print("Finished.")
+    prediction_ids = results.predictions
+    metrics = results.metrics
+    with open("debug_trainer_predict.json", 'w') as f:
+        json.dump(metrics, f)
+    decoded = processor.batch_decode(prediction_ids[:, :prediction_ids.shape[1]], skip_special_tokens=True) #with language token
+    labels = processor.batch_decode(results.label_ids[:, :results.label_ids.shape[1]], skip_special_tokens=True) #without
+    with open('./playground/transcriptions.csv', 'w', newline="", encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Pred", "Label"])
+        writer. writerows(zip(decoded, labels))
+
+    print("Results saved.")
