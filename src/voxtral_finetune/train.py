@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import evaluate
+import json
 
 from audiomentations import Compose
 from transformers import (
@@ -174,8 +175,23 @@ def train(cfg: Any, config_name: str) -> None:
         compute_metrics=compute_metrics,
     )
     
-    print("Starting training...")
-    trainer.train()
+    # print("Starting training...")
+    # trainer.train()
+
+    # print("Starting evaluate...")
+    # results = trainer.evaluate()
+    # print("Finished.")
+    # with open("debug_trainer_evaluate.json", 'w') as f:
+    #     json.dump(results, f)
+    # print("Results saved.")
+
+    print("Starting evaluate...")
+    results = trainer.predict(ds_eval)
+    print("Finished.")
+    with open("debug_trainer_predict.json", 'w') as f:
+        json.dump(results, f)
+    print("Results saved.")
+
     
     
 def _build_wer_fn(processor, wer_metric):
