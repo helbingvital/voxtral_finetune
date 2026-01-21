@@ -99,7 +99,7 @@ def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv
 def _load_radmed_uka(datafiles=None, root_path="/Users/helbing/", use_normalized_label=True):
     if not datafiles:
         datafiles = {'train':"splits/medical_split_20251113/train.csv", 
-                     "eval":"splits/medical_split_20251113/valid.csv", 
+                     "eval":"splits/medical_split_20251113/valid_debug.csv", 
                      "test":"splits/medical_split_20251113/test.csv"}
     dataset = load_dataset("csv", data_files=datafiles)
     

@@ -29,8 +29,10 @@ def main():
         config_file = os.path.join(project_dir, DEFAULT_CONFIG_FILE_NAME)
     else:
         config_file = args.config_name
-        
+    
+    print("Loading config...")
     cfg = load_config(config_file)
+    print("Starting Train...")
     train(cfg, os.path.basename(config_file).split(".")[0])
     
 
