@@ -3,7 +3,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import yaml
 
-from dataset import _load_radmed_uka, _convert_radmed_uka_split_csv
+from dataset import _load_radmed_uka, _convert_radmed_uka_split_csv, load_test_data
 from train import train
 from main import load_config
 from collator import VoxtralCollatorTranscriptionTask
@@ -17,6 +17,9 @@ print("hello")
 #----------Load Dataset -------------------------
 # _convert_radmed_uka_split_csv()
 ds_train, ds_validation = _load_radmed_uka(root_path="/hpcwork/ve001107/uka_dataset/")
+df_test = load_test_data({'name': "radmed_uka",
+  'laguage': "de",
+  'root_path': "/Users/helbing/"})
 # ---------get sample and batch manually -----------------
 first_sample = ds_train[0]
 batch = [ds_train[0],ds_train[1],ds_train[2],ds_train[3]]
