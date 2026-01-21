@@ -38,3 +38,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+#Peft/Lora training https://medium.com/@plawanrath/fine-tuning-mistral-7b-on-apple-silicon-a-mac-users-journey-with-axolotl-lora-c6ff53858e7d
