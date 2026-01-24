@@ -11,5 +11,13 @@ wheels/
 
 # Virtual environments
 .venv
+.venv_debug_jiwer
 config/*
 !config/voxtral-3B-v0.yaml
+
+#Results
+runs/
+results/
+slurm_out/
+playground/
+wandb/
