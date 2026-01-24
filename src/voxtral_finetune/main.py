@@ -2,6 +2,7 @@ import sys
 import os
 import yaml
 import argparse
+from datetime import datetime
 
 from voxtral_finetune.train import train
 from voxtral_finetune.utils import get_abs_project_root_path
@@ -20,7 +21,7 @@ def load_config(config_file: str ) -> dict:
 
 
 def main():
-    p = argparse.ArgumentParser(description="Fine-tune Whisper")
+    p = argparse.ArgumentParser(description="Fine-tune Voxtral")
     p.add_argument("config_name", type=str,  nargs='?', default=None, help="Name of the YAML file in the config folder (without .yaml)")
     args = p.parse_args()
 
@@ -32,6 +33,10 @@ def main():
     
     print("Loading config...")
     cfg = load_config(config_file)
+    wandb_name = f"{os.path.basename(config_file).split(".")[0]}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+    os.environ["WANDB_PROJECT"] = "Voxtral"
+    os.environ["WANDB_NAME"] = wandb_name
+    
     print("Starting Train...")
     train(cfg, os.path.basename(config_file).split(".")[0])
     

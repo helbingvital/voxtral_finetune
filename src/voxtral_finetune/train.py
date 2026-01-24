@@ -157,7 +157,7 @@ def train(cfg: Any, config_name: str) -> None:
         remove_unused_columns=False,
         logging_steps=cfg["training"].get("logging_steps", 25),
         label_smoothing_factor=cfg["training"].get("label_smoothing_factor", 0),
-        report_to=["tensorboard"],
+        report_to=["tensorboard", "wandb"],
         metric_for_best_model=cfg["training"].get("metric_for_best_model"),
         greater_is_better=cfg["training"].get("greater_is_better"),
         dataloader_num_workers=cfg["training"].get("dataloader_num_workers"),
@@ -184,8 +184,8 @@ def train(cfg: Any, config_name: str) -> None:
         compute_metrics=compute_metrics,
     )
     
-    # print("Starting training...")
-    # trainer.train()
+    print("Starting training...")
+    trainer.train()
 
     # print("Starting evaluate...")
     # results = trainer.evaluate()
@@ -194,21 +194,21 @@ def train(cfg: Any, config_name: str) -> None:
     #     json.dump(results, f)
     # print("Results saved.")
 
-    print("Starting evaluate...")
-    results = trainer.predict(ds_eval)
-    print("Finished.")
-    prediction_ids = results.predictions
-    metrics = results.metrics
-    with open("debug_trainer_predict.json", 'w') as f:
-        json.dump(metrics, f)
-    decoded = processor.batch_decode(prediction_ids[:, :prediction_ids.shape[1]], skip_special_tokens=True) #with language token
-    labels = processor.batch_decode(results.label_ids[:, :results.label_ids.shape[1]], skip_special_tokens=True) #without
-    with open('./playground/transcriptions.csv', 'w', newline="", encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Pred", "Label"])
-        writer. writerows(zip(decoded, labels))
+    # print("Starting evaluate...")
+    # results = trainer.predict(ds_eval)
+    # print("Finished.")
+    # prediction_ids = results.predictions
+    # metrics = results.metrics
+    # with open("debug_trainer_predict.json", 'w') as f:
+    #     json.dump(metrics, f)
+    # decoded = processor.batch_decode(prediction_ids[:, :prediction_ids.shape[1]], skip_special_tokens=True) #with language token
+    # labels = processor.batch_decode(results.label_ids[:, :results.label_ids.shape[1]], skip_special_tokens=True) #without
+    # with open('./playground/transcriptions.csv', 'w', newline="", encoding='utf-8') as f:
+    #     writer = csv.writer(f)
+    #     writer.writerow(["Pred", "Label"])
+    #     writer. writerows(zip(decoded, labels))
 
-    print("Results saved.")
+    # print("Results saved.")
 
     
     
