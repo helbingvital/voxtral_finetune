@@ -3,12 +3,18 @@ model:
   seed:       0
 
 dataset: 
-  name: "multimed_german"
-  laguage: "de"
+  name: "radmed_uka"
+  # language: "de"
+  root_path: "/hpcwork/ve001107/uka_dataset/"
+  normalize: True
+  apply_replacements: True
+  datafiles: {'train':"splits/uka_all_20260121/train.csv", 
+              "eval":"splits/uka_all_20260121/valid.csv", 
+              "test":"splits/uka_all_20260121/test.csv"}
 
 training:
   per_device_train_batch_size: 4
-  per_device_eval_batch_size:  4
+  per_device_eval_batch_size:  8
   learning_rate:             0.00001
   gradient_accumulation_steps: 1
   weight_decay:              0.01
@@ -24,27 +30,34 @@ training:
   max_grad_norm:             5.0
   dropout:                   0.0
   attention_dropout:         0.0
-  #outpt_dir:                path/to/your/output/dir
+  output_dir:                ./runs/voxtral-3B-mini-baseline_0123/
   save_total_limit:          1
+  bf16:                      True
 
+inference:
+  predict_with_generate:     True
+  num_beams:                 1
+  language:                  "de"
+  output_dir:                ./results/voxtral-3B-mini-baseline_0123/
+  model:                      "mistralai/Voxtral-Mini-3B-2507"
 
-augmentations:
-  p: 0.8
-  transforms:
-    - name: BitCrush
-      args:
-        min_bit_depth: 8
-        max_bit_depth: 12
-      p: 0.8  
-    # - name: AddGaussianNoise
-    #   args:
-    #     min_amplitude: 0.001
-    #     max_amplitude: 0.015
-    #   p: 0.5
-    - name: LengthAwareTimeStretch   # dotted path ⇒ your subclass
-      args:
-        max_duration_sec: 30
-        min_rate: 0.5
-        max_rate: 2.0
-        skip_if_too_long: true
-      p: 1.0
+# augmentations:
+#   p: 0.8
+#   transforms:
+#     - name: BitCrush
+#       args:
+#         min_bit_depth: 8
+#         max_bit_depth: 12
+#       p: 0.8  
+#     # - name: AddGaussianNoise
+#     #   args:
+#     #     min_amplitude: 0.001
+#     #     max_amplitude: 0.015
+#     #   p: 0.5
+#     - name: LengthAwareTimeStretch   # dotted path ⇒ your subclass
+#       args:
+#         max_duration_sec: 30
+#         min_rate: 0.5
+#         max_rate: 2.0
+#         skip_if_too_long: true
+#       p: 1.0
