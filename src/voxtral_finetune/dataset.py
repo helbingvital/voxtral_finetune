@@ -91,16 +91,22 @@ def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv
     drop_columns = list(set(drop_columns) & set(df.columns))
     df.drop(columns=drop_columns, inplace=True,)
 
+    df.rename(columns={"text": "text_org", "text_norm": "text_norm_org"}, inplace=True)
+    df["text"] = df["text_org"].apply(lambda x: _apply_replacement_dict(x))
+    df["text_norm"] = df["text_norm_org"].apply(lambda x: _apply_replacement_dict(x))
+
     df_train = df[df["split"]=="train"].drop(columns="split").to_csv(new_split_csv_directory / "train.csv")
     df_eval = df[df["split"]=="valid"].drop(columns="split").to_csv(new_split_csv_directory / "valid.csv")
     df_test = df[df["split"]=="test"].drop(columns="split").to_csv(new_split_csv_directory / "test.csv")
 
+def _apply_replacement_dict(text, replace_dict= 
+                            {' <PUNKT>': '.', ' <KOMMA>': ',', ' <DOPPELPUNKT>': ':', ' <KLAMMER_ZU>': ')','<KLAMMER_AUF> ': '(',' <NEUE_ZEILE> ': '.\n',' <ABSATZ> ': '.\n\n',' <NEUER_ABSATZ> ': '.\n\n','..': '.',}):
+    for old, new in replace_dict.items():
+        text = text.replace(old, new)
+    return text
 
-def _load_radmed_uka(datafiles=None, root_path="/Users/helbing/", use_normalized_label=True):
-    if not datafiles:
-        datafiles = {'train':"splits/medical_split_20251113/train.csv", 
-                     "eval":"splits/medical_split_20251113/valid_debug.csv", 
-                     "test":"splits/medical_split_20251113/test.csv"}
+def _load_radmed_uka(datafiles, root_path="/Users/helbing/", use_normalized_label=True, apply_replacement_dict=True, splits=["train", "validation"]):
+    
     dataset = load_dataset("csv", data_files=datafiles)
     
     def prepend_root(batch):
@@ -109,38 +115,55 @@ def _load_radmed_uka(datafiles=None, root_path="/Users/helbing/", use_normalized
 
     dataset = dataset.map(prepend_root, batched=True)
 
-    train = dataset['train']
-    train = train.rename_column("text_norm", "labels") if use_normalized_label else train.rename_column("text", "labels")
-    train = train.cast_column("audio", Audio(sampling_rate=16_000))
-    # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
+    if use_normalized_label:
+        label_column = "text_norm" if apply_replacement_dict else "text_norm_org"
+    else:
+        label_column = "text" if apply_replacement_dict else "text_org"
+        
+    ds = []
+    if "train" in splits:
+        train = dataset['train']
+        train = train.rename_column(label_column, "labels") if use_normalized_label else train.rename_column("text", "labels")
+        train = train.cast_column("audio", Audio(sampling_rate=16_000))
+        # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
+        _validate_dataset_split(train, "train")
+        ds.append(train)
     
-    validation = dataset["eval"]
-    validation = validation.rename_column("text_norm", "labels") if use_normalized_label else train.rename_column("text", "labels")
-    validation = validation.cast_column("audio", Audio(sampling_rate=16_000))
-    # validation = validation.filter(lambda example: example["duration"] <= 30)
+    if "validation" in splits:
+        validation = dataset["eval"]
+        validation = validation.rename_column(label_column, "labels") if use_normalized_label else train.rename_column("text", "labels")
+        validation = validation.cast_column("audio", Audio(sampling_rate=16_000))
+        # validation = validation.filter(lambda example: example["duration"] <= 30)
+        _validate_dataset_split(validation, "validation")
+        ds.append(validation)
 
-    _validate_dataset_split(train, "train")
-    _validate_dataset_split(validation, "validation")
+    if "test" in splits:
+        test = dataset['test']
+        test = test.rename_column("text_norm", "labels") if use_normalized_label else test.rename_column("text", "labels")
+        test = test.cast_column("audio", Audio(sampling_rate=16_000))
+        # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
+        _validate_dataset_split(test, "test")
+        ds.append(test)
 
-    return train, validation
+    return ds
 
-def _load_radmed_uka_test(datafiles=None, root_path="/Users/helbing/", use_normalized_label=True):
-    if not datafiles:
-        datafiles = {"test":"splits/medical_split_20251113/test.csv",}
-    dataset = load_dataset("csv", data_files=datafiles)
+# def _load_radmed_uka_test(datafiles=None, root_path="/Users/helbing/", use_normalized_label=True, apply_replacement_dict=True):
+#     if not datafiles:
+#         datafiles = {"test":"splits/medical_split_20251113/test.csv",}
+#     dataset = load_dataset("csv", data_files=datafiles)
     
-    def prepend_root(batch):
-        batch["audio"] = [os.path.join(root_path, path) for path in batch["audio"]]
-        return batch
-    dataset = dataset.map(prepend_root, batched=True)
+#     def prepend_root(batch):
+#         batch["audio"] = [os.path.join(root_path, path) for path in batch["audio"]]
+#         return batch
+#     dataset = dataset.map(prepend_root, batched=True)
 
-    test = dataset['test']
-    test = test.rename_column("text_norm", "labels") if use_normalized_label else train.rename_column("text", "labels")
-    test = test.cast_column("audio", Audio(sampling_rate=16_000))
-    # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
+#     test = dataset['test']
+#     test = test.rename_column("text_norm", "labels") if use_normalized_label else test.rename_column("text", "labels")
+#     test = test.cast_column("audio", Audio(sampling_rate=16_000))
+#     # train = train.filter(lambda example: example["duration"] <= 30) #redundant, in clean split.csv they are already filtered
 
-    _validate_dataset_split(test, "test")
-    return test
+#     _validate_dataset_split(test, "test")
+#     return test
 
 def load_train_val_data(dataset_cfg: Any):
     dataset_name = dataset_cfg.get("name")
@@ -155,8 +178,18 @@ def load_train_val_data(dataset_cfg: Any):
         return _load_multimed_german()
     elif dataset_name == "radmed_uka":
         root_path = dataset_cfg.get("root_path")
+        use_normalizer = dataset_cfg.get("normalize", True)
+        apply_replace_dict = dataset_cfg.get("apply_replacements", True)
+        datafiles = dataset_cfg.get("datafiles",    {'train':"splits/uka_all_20260121/train.csv", 
+                                                    "eval":"splits/uka_all_20260121/valid.csv", 
+                                                    "test":"splits/uka_all_20260121/test.csv"})
+        
         print("Loading radmed uka dataset from local files...")
-        return _load_radmed_uka(root_path=root_path)
+        return _load_radmed_uka(root_path=root_path, 
+                                datafiles=datafiles, 
+                                use_normalized_label=use_normalizer, 
+                                apply_replacement_dict=apply_replace_dict,
+                                splits=["train", "validation"])
     else:
         raise ValueError(f"Dataset {dataset_name} not implemented.")
 
@@ -166,8 +199,17 @@ def load_test_data(dataset_cfg:Any):
         raise ValueError(f"Dataset {dataset_name} not supported. Choose from 'librispeech_clean', 'multimed_german' or 'radmed_uka'.")
     
     if dataset_name == "radmed_uka":
-        root_path = dataset_cfg.get("root_path")
+        root_path = dataset_cfg.get("root_path","/hpcwork/ve001107/uka_dataset/")
+        use_normalizer = dataset_cfg.get("normalize", True)
+        apply_replace_dict = dataset_cfg.get("apply_replacements", True)
+        datafiles = dataset_cfg.get("datafiles",    {'train':"splits/uka_all_20260121/train.csv", 
+                                                    "eval":"splits/uka_all_20260121/valid.csv", 
+                                                    "test":"splits/uka_all_20260121/test.csv"})
         print("Loading radmed uka dataset from local files...")
-        return _load_radmed_uka_test(root_path=root_path)
+        return _load_radmed_uka(root_path=root_path, 
+                                datafiles=datafiles,
+                                use_normalized_label=use_normalizer, 
+                                apply_replacement_dict=apply_replace_dict,
+                                splits=["test",])[0]
     else:
         raise ValueError(f"Dataset {dataset_name} not implemented.")
