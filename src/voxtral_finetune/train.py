@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Union, Unpack
 import importlib
 from functools import partial
 
@@ -17,13 +17,18 @@ from transformers import (
     Seq2SeqTrainer,
     IntervalStrategy,
     Seq2SeqTrainingArguments,
+    VoxtralForConditionalGeneration,
 )
 from transformers.trainer_utils import EvalPrediction
-
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
+from transformers.cache_utils import Cache
+from accelerate.utils import convert_to_fp32
 from voxtral_finetune.collator import VoxtralCollatorTranscriptionTask
 from voxtral_finetune.dataset import load_train_val_data
 from voxtral_finetune.utils import get_abs_project_root_path
 
+from peft import prepare_model_for_kbit_training, LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
 
 CUSTOM_AUGMENTATIONS = {
     "LengthAwareTimeStretch": "voxtral_finetune.augmentations",
@@ -61,6 +66,80 @@ def dynamic_transform(batch, aug_compose_fn=None):
 def add_transform_to_dataset(ds, cfg, aug_compose_fn=None):
     return ds.with_transform(partial(dynamic_transform, aug_compose_fn=aug_compose_fn))
 
+class CustomVoxtralForConditionalGeneration(VoxtralForConditionalGeneration):
+    @can_return_tuple
+    @auto_docstring
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> CausalLMOutputWithPast:
+        r"""
+        Example:
+
+        ```python
+        >>> from transformers import VoxtralForConditionalGeneration, AutoProcessor
+        >>> import torch
+
+        >>> device = "cuda" if torch.cuda.is_available() else "cpu"
+        >>> repo_id = "mistralai/Voxtral-Mini-3B-2507"
+
+        >>> processor = AutoProcessor.from_pretrained(repo_id)
+        >>> model = VoxtralForConditionalGeneration.from_pretrained(repo_id, torch_dtype=torch.bfloat16, device_map=device)
+
+        >>> conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "audio",
+                        "url": "https://huggingface.co/datasets/hf-internal-testing/dummy-audio-samples/resolve/main/dude_where_is_my_car.wav",
+                    },
+                    {"type": "text", "text": "What can you tell me about this audio?"},
+                ],
+            }
+        ]
+
+        >>> inputs = processor.apply_chat_template(conversation)
+        >>> inputs = inputs.to(device, dtype=torch.bfloat16)
+
+        >>> outputs = model.generate(**inputs, max_new_tokens=30)
+        >>> processor.batch_decode(outputs[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        ["This audio is a humorous conversation between two friends, likely in English, where one of them is trying to figure out what the other's tattoo says."]
+        ```"""
+        if inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+
+        if input_features is not None:
+            audio_embeds = self.get_audio_embeds(input_features)
+            if inputs_embeds.dtype == torch.float32:
+                audio_embeds = convert_to_fp32(audio_embeds) #CHV: Match dtype of inputs_embeds
+            # replace text-audio token placeholders with audio embeddings
+            audio_token_mask = input_ids == self.config.audio_token_id 
+            inputs_embeds = inputs_embeds.clone() #CHV: change to work with peft model
+            inputs_embeds[audio_token_mask] = audio_embeds
+
+        outputs: BaseModelOutputWithPast = self.language_model(
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            labels=labels,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            logits_to_keep=logits_to_keep,
+            **kwargs,
+        )
+        return outputs
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     def __init__(self, *args, processor=None, **kwargs):
@@ -134,10 +213,18 @@ def train(cfg: Any, config_name: str) -> None:
     dtype = torch.bfloat16 if bf16 else torch.float16
     processor = AutoProcessor.from_pretrained(cfg.get("model", {}).get("pretrained", ""))
 
-    model = AutoModel.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=dtype)
+    model = CustomVoxtralForConditionalGeneration.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=dtype, load_in_8bit=True)
+    # model = prepare_model_for_kbit_training(model, output_embedding_layer_name="proj_out")
+    model = prepare_model_for_kbit_training(model)
+    config = LoraConfig(r=32, 
+                        lora_alpha=64, 
+                        # target_modules="all-linear", 
+                        target_modules=["q_proj", "v_proj"],
+                        lora_dropout=0.05, 
+                        bias="none")
+    model = get_peft_model(model, config)
+    model.print_trainable_parameters()
 
-    
-    
     args = Seq2SeqTrainingArguments(
         output_dir=cfg["training"].get("output_dir", os.path.join(get_abs_project_root_path(), f"weights/{config_name}/")),
         per_device_train_batch_size=cfg["training"]["per_device_train_batch_size"],
@@ -165,6 +252,7 @@ def train(cfg: Any, config_name: str) -> None:
         optim="adamw_bnb_8bit",
         max_grad_norm=cfg["training"].get("max_grad_norm", None),
         predict_with_generate=False,
+        label_names=["labels"],
     )
     collator = VoxtralCollatorTranscriptionTask(processor, 
                                                 cfg.get("model", {}).get("pretrained", ""), 
@@ -186,30 +274,6 @@ def train(cfg: Any, config_name: str) -> None:
     
     print("Starting training...")
     trainer.train()
-
-    # print("Starting evaluate...")
-    # results = trainer.evaluate()
-    # print("Finished.")
-    # with open("debug_trainer_evaluate.json", 'w') as f:
-    #     json.dump(results, f)
-    # print("Results saved.")
-
-    # print("Starting evaluate...")
-    # results = trainer.predict(ds_eval)
-    # print("Finished.")
-    # prediction_ids = results.predictions
-    # metrics = results.metrics
-    # with open("debug_trainer_predict.json", 'w') as f:
-    #     json.dump(metrics, f)
-    # decoded = processor.batch_decode(prediction_ids[:, :prediction_ids.shape[1]], skip_special_tokens=True) #with language token
-    # labels = processor.batch_decode(results.label_ids[:, :results.label_ids.shape[1]], skip_special_tokens=True) #without
-    # with open('./playground/transcriptions.csv', 'w', newline="", encoding='utf-8') as f:
-    #     writer = csv.writer(f)
-    #     writer.writerow(["Pred", "Label"])
-    #     writer. writerows(zip(decoded, labels))
-
-    # print("Results saved.")
-
     
     
 def _build_wer_fn(processor, wer_metric):
