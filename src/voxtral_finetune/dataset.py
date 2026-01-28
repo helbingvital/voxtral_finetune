@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from datasets import Dataset, load_dataset, Audio
 
+from voxtral_finetune.normalizer import CustomNormalizer
+
 
 def _validate_dataset_split(dataset_split, split_name: str):
     """Validate that a dataset split is loaded correctly."""
@@ -57,7 +59,6 @@ def _load_librispeech_dataset_clean():
 
     return train, validation
 
-
 def _load_multimed_german():
     dataset = load_dataset("leduckhai/MultiMed", "German")
     
@@ -80,7 +81,9 @@ def _load_multimed_german():
     return train, validation
 
 
-def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv", new_split_csv_directory="./splits/medical_split_20251113/"):
+def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv", 
+                                  new_split_csv_directory="./splits/medical_split_20251113/",
+                                  reapply_normalizer=False):
     '''Cleanup split.csv files that were created for whisper finetune to be compatible with load_dataset'''
     new_split_csv_directory = Path(new_split_csv_directory)
     new_split_csv_directory.mkdir(parents=True, exist_ok=True)
@@ -91,6 +94,9 @@ def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv
     drop_columns = list(set(drop_columns) & set(df.columns))
     df.drop(columns=drop_columns, inplace=True,)
 
+    if reapply_normalizer or "text_norm" not in df.columns:
+        normalizer = CustomNormalizer()
+        df["text_norm"]=df["text"].apply(lambda x: normalizer(x))
     df.rename(columns={"text": "text_org", "text_norm": "text_norm_org"}, inplace=True)
     df["text"] = df["text_org"].apply(lambda x: _apply_replacement_dict(x))
     df["text_norm"] = df["text_norm_org"].apply(lambda x: _apply_replacement_dict(x))
