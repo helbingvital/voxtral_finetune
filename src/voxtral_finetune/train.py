@@ -1,8 +1,11 @@
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from typing import Dict, Any, Optional, Union, Unpack
 import importlib
 from functools import partial
 
-import os
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -18,17 +21,26 @@ from transformers import (
     IntervalStrategy,
     Seq2SeqTrainingArguments,
     VoxtralForConditionalGeneration,
+    BitsAndBytesConfig
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
+# from transformers.quantization_utils import BitsAndBytesConfig
+
 from transformers.cache_utils import Cache
 from accelerate.utils import convert_to_fp32
 from voxtral_finetune.collator import VoxtralCollatorTranscriptionTask
 from voxtral_finetune.dataset import load_train_val_data
 from voxtral_finetune.utils import get_abs_project_root_path
 
-from peft import prepare_model_for_kbit_training, LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
+from peft import (prepare_model_for_kbit_training, 
+                  LoraConfig, 
+                  PeftModel, 
+                  LoraModel, 
+                  LoraConfig, 
+                  get_peft_model, 
+                  TaskType)
 
 CUSTOM_AUGMENTATIONS = {
     "LengthAwareTimeStretch": "voxtral_finetune.augmentations",
@@ -121,7 +133,7 @@ class CustomVoxtralForConditionalGeneration(VoxtralForConditionalGeneration):
 
         if input_features is not None:
             audio_embeds = self.get_audio_embeds(input_features)
-            if inputs_embeds.dtype == torch.float32:
+            if inputs_embeds.dtype == torch.float32 and not audio_embeds.dtype == torch.float32:
                 audio_embeds = convert_to_fp32(audio_embeds) #CHV: Match dtype of inputs_embeds
             # replace text-audio token placeholders with audio embeddings
             audio_token_mask = input_ids == self.config.audio_token_id 
@@ -192,7 +204,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
 
 def train(cfg: Any, config_name: str) -> None:
-
+    # ---------------------------- Dataset ---------------------------------------
     if cfg.get("dataset") is None or cfg.get("dataset").get("name") is None:
         raise ValueError("Please provide a dataset configuration in the config file under 'dataset' and 'dataset.name'.")
     
@@ -205,26 +217,55 @@ def train(cfg: Any, config_name: str) -> None:
    
     print("Len train ds:", len(ds_train))
     print("Len val dataset:", len(ds_eval))
-    
+
+    # ---------------------------- dtypes ---------------------------------------
+    #dtype for computations (bf16 vs fp16, always use bf16 if hardware supports it)
     fp16 = cfg.get("training", {}).get("fp16", False)
     bf16 = cfg.get("training", {}).get("bf16", True)
     if fp16 and bf16:
         raise Exception("Only select bf16 or fp16 in config file.")
     dtype = torch.bfloat16 if bf16 else torch.float16
+    #quantization of model (only for saving weights, get dequantized for forward and backward pass)
+    model_kwargs={}
+    model_bits = cfg.get("model",{}).get("quantization", 16)
+    if model_bits == 8:
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True,
+                                                                 llm_int8_skip_modules=["lm_head"])
+        raise UserWarning("Loading model in 8bit saves memory, but comes at a huge overhead for GPU. " \
+        "It constantly needs to perform int8 bf16 conversions which slows performance down by at least 5x. " \
+        "Avoid this setting. Look into NF4 (4bit)")
+    elif model_bits == 4:
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True,
+                                                                 bnb_4bit_use_double_quant=True,
+                                                                 bnb_4bit_quant_type="nf4",
+                                                                 bnb_4bit_compute_dtype=dtype,)
+    elif model_bits == 16:
+        pass
+    else:
+        raise Exception(f"Loading model with {model_bits}bit quantization isn't supported.")
+    
     processor = AutoProcessor.from_pretrained(cfg.get("model", {}).get("pretrained", ""))
+    model = CustomVoxtralForConditionalGeneration.from_pretrained(cfg.get("model", {}).get("pretrained", ""), 
+                                                                  torch_dtype=dtype, 
+                                                                  **model_kwargs)
+    if model_bits==4 or model_bits==8:
+        model = prepare_model_for_kbit_training(model)
 
-    model = CustomVoxtralForConditionalGeneration.from_pretrained(cfg.get("model", {}).get("pretrained", ""), torch_dtype=dtype, load_in_8bit=True)
-    # model = prepare_model_for_kbit_training(model, output_embedding_layer_name="proj_out")
-    model = prepare_model_for_kbit_training(model)
-    config = LoraConfig(r=32, 
-                        lora_alpha=64, 
-                        # target_modules="all-linear", 
-                        target_modules=["q_proj", "v_proj"],
-                        lora_dropout=0.05, 
-                        bias="none")
-    model = get_peft_model(model, config)
-    model.print_trainable_parameters()
+    # ---------------------------- Set up LoRA ----------------------------
+    lora_cfg = cfg.get("model", {}).get("lora", None)
+    if lora_cfg:
+        print("Creating LoRA Adapter and wrapping model...")
+        config = LoraConfig(task_type=TaskType.SEQ_2_SEQ_LM,
+                            r=lora_cfg.get("r", 32), 
+                            lora_alpha=lora_cfg.get("lora_alpha",64), 
+                            # target_modules="all-linear", 
+                            target_modules=lora_cfg.get("target_modules", ["q_proj", "v_proj"]),
+                            lora_dropout=lora_cfg.get("lora_dropout",0.05), 
+                            bias=lora_cfg.get("bias", "none"))
+        model = get_peft_model(model, config)
+        model.print_trainable_parameters()
 
+    
     args = Seq2SeqTrainingArguments(
         output_dir=cfg["training"].get("output_dir", os.path.join(get_abs_project_root_path(), f"weights/{config_name}/")),
         per_device_train_batch_size=cfg["training"]["per_device_train_batch_size"],
@@ -248,7 +289,7 @@ def train(cfg: Any, config_name: str) -> None:
         metric_for_best_model=cfg["training"].get("metric_for_best_model"),
         greater_is_better=cfg["training"].get("greater_is_better"),
         dataloader_num_workers=cfg["training"].get("dataloader_num_workers"),
-        gradient_checkpointing=False,
+        gradient_checkpointing=cfg["training"].get("gradient_checkpointing", False),
         optim="adamw_bnb_8bit",
         max_grad_norm=cfg["training"].get("max_grad_norm", None),
         predict_with_generate=False,
