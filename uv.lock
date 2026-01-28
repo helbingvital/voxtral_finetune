@@ -1150,6 +1150,27 @@ wheels = [
 ]
 
 [[package]]
+name = "peft"
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/48/147b3ea999560b40a34fd78724c7777aa9d18409c2250bdcaf9c4f2db7fc/peft-0.18.1.tar.gz", hash = "sha256:2dd0d6bfce936d1850e48aaddbd250941c5c02fc8ef3237cd8fd5aac35e0bae2", size = 635030 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/14/b4e3f574acf349ae6f61f9c000a77f97a3b315b4bb6ad03791e79ae4a568/peft-0.18.1-py3-none-any.whl", hash = "sha256:0bf06847a3551e3019fc58c440cffc9a6b73e6e2962c95b52e224f77bbdb50f1", size = 556960 },
+]
+
+[[package]]
 name = "pillow"
 version = "11.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2178,6 +2199,7 @@ dependencies = [
     { name = "evaluate" },
     { name = "jiwer" },
     { name = "mistral-common" },
+    { name = "peft" },
     { name = "tensorboard" },
     { name = "transformers", extra = ["torch"] },
     { name = "wandb" },
@@ -2191,6 +2213,7 @@ requires-dist = [
     { name = "evaluate", specifier = "==0.4.6" },
     { name = "jiwer", specifier = "==4.0.0" },
     { name = "mistral-common", specifier = ">=1.8.3" },
+    { name = "peft", specifier = ">=0.18.1" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "transformers", extras = ["torch"], specifier = ">=4.54.0" },
     { name = "wandb", specifier = ">=0.24.0" },
