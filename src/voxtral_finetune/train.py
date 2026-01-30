@@ -192,7 +192,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
         with torch.no_grad():
             generated_tokens = model.generate(
-                prompt_tensor,
+                input_ids=prompt_tensor,
                 attention_mask=attention_mask,
                 input_features = inputs["input_features"],
                 max_new_tokens=422,
