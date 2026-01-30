@@ -17,8 +17,10 @@ class NormalizerMode(Enum):
     NORMALIZE = 2
 
 class CustomNormalizer:
-    def __init__(self):
-        self.normalizers = [ NumberNormalizer(), UnitNormalizer(), SpellingNormalizer()]
+    def __init__(self, spelling_dict_path: Optional[str]="splits/hyphen_rules/hyphenated_words_to_normalize.json"):
+        self.normalizers = [ NumberNormalizer(), 
+                            UnitNormalizer(), 
+                            SpellingNormalizer(path_substitute_dict=spelling_dict_path)]
     def __call__(self, text:str):
         for normalizer in self.normalizers:
             text = normalizer(text)
@@ -264,6 +266,7 @@ class SpellingNormalizer:
         #                         "Mamma-Sonographie": "Mammasonografie", #can also just be part of longer word, eg. Mammasonografien
         #                         "Methylprednisolon-Gabe": "Methylprednisolongabe"
         #                         }
+
         if path_substitute_dict:
             with open(path_substitute_dict) as f:
                 self.substitute_dict = json.load(f)

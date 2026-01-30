@@ -83,7 +83,8 @@ def _load_multimed_german():
 
 def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv", 
                                   new_split_csv_directory="./splits/medical_split_20251113/",
-                                  reapply_normalizer=False):
+                                  reapply_normalizer=False,
+                                  normalizer_spelling_substitutions=None):
     '''Cleanup split.csv files that were created for whisper finetune to be compatible with load_dataset'''
     new_split_csv_directory = Path(new_split_csv_directory)
     new_split_csv_directory.mkdir(parents=True, exist_ok=True)
@@ -95,7 +96,7 @@ def _convert_radmed_uka_split_csv(split_csv="./splits/medical_split_20251113.csv
     df.drop(columns=drop_columns, inplace=True,)
 
     if reapply_normalizer or "text_norm" not in df.columns:
-        normalizer = CustomNormalizer()
+        normalizer = CustomNormalizer(spelling_dict_path=normalizer_spelling_substitutions)
         df["text_norm"]=df["text"].apply(lambda x: normalizer(x))
     df.rename(columns={"text": "text_org", "text_norm": "text_norm_org"}, inplace=True)
     df["text"] = df["text_org"].apply(lambda x: _apply_replacement_dict(x))
